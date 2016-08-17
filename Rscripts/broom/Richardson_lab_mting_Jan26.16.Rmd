@@ -1,0 +1,165 @@
+---
+title: "O'Connor lab meeting Feb 26 2016"
+output: 
+  html_document: 
+    keep_md: yes
+---
+We'll use the following R packages
+
+```{r, echo=FALSE, warning=FALSE}
+require(lme4)
+require(MuMIn)
+require(arm)
+library(broom)
+library(dplyr)
+library(tidyr)
+library(purrr)
+```
+
+We'll use data from the npk dataset describing some  experiment  where people measured plant yield following manipulations of N, P, and K in 6 treatment blocks.
+
+```{r}
+npk <- tbl_df(npk)
+```
+
+The simpliest method will be an additive linear model that we just analyze with ANOVA. OK if that's your thing but lets go a bit deeper...
+```{r}
+global.lm <- lm(yield ~ N + K + P, data = npk)
+anova(global.lm)
+summary(global.lm)
+```
+Lets take an IT approach. We can do this manually in base R if the number of models is small.
+```{r}
+# Make a reduced model
+reduced.lm <- lm(yield ~ N + K, data = npk)
+# Use AIC to compare with the global
+AIC(global.lm, reduced.lm)
+```
+Reduced model has a lower AIC score, thus has more support.There are a bunch of other manual calcs that we can use to figure out the weights, delta AIC values etc. but there are easier shortcuts that do this for us and it can quickly get out of hand when there are more models. The MuMIn package can calculate AIC's of multiple models at the same time... Also, we should actually be using mixed effects models due to the experimental blocks.  
+The following code calculates AIC values (AICc for small sample sizes) of all possible subsets of the global model. Lets go through step by step.
+
+```{r}
+## Global mixed effects model with all possible interaction terms using lme4
+## here block is a random effect
+global <-lmer(yield ~ N*P*K + (1|block), data = npk,na.action = "na.fail")
+tidy(global) %>% View
+glance(global)
+# augment(global) %>% View
+```
+Now we jump into the MuMIn package using the *dredge* function. For simplicity
+lets not consider models with 3-way interactions. We can suppress these with "m.lim" within the dredge function, which limits the number of terms allowed in a model
+```{r}
+all.models <- dredge(global, rank ="AICc", m.lim=c(1,3), REML = FALSE)
+all.models
+```
+
+Now that we have our ranked candidate model set, we can make inferences into the relative importance among predictors by summing the weights across all models where a given predictor is included.
+
+```{r}
+importance(all.models)
+```
+However, this still doesn't tell us about how well the models actually fit the data (will return to this later) and if parameter slopes are actually meaningful. The next step is coming up with parameter estimates and associated 95% CIs by averaging across models.
+The following code uses the *model.avg* function to calculate model averaged 95% confidence intervals and slope estimates. 
+
+```{r}
+model.avg(all.models)
+```
+If we want, we can subset only the models with a certain delta cut-off. Also embedding this within the *summary* command gives more info
+
+```{r}
+sum <- summary(model.avg(all.models, subset = delta < 4))
+sum$msTable
+```
+#### Conditional vs. full model averaging
+Conditional averages parameters across only the models where they occur while full averages parameters across all models with zeros for models where a given parameter does not occur. Notice how the full model averaged parameters are closer to zero in the output
+
+#### To extract model averaged 95% CIs
+The default is to use conditional averages but the command *full = TRUE* changes it to full averages. The same subset command from above also works here...
+
+```{r}
+confint(model.avg(all.models), level = 0.95)
+
+```
+### Standardizing predictors
+Before moving forward, we should go back and properly standardize predictors. This is important for interpreting effects when they are on different scales OR when interactions are present.
+For binary predictors, we re-scale standardizing to a mean of 0 and SD of 0.5. The command *binary.input = center* tells R we have binary predictors.
+Then we run dredge again to generate a new set of models and associated parameter estimates that are on the same scale.
+
+```{r}
+global.std <- standardize(global, standardize.y = FALSE, binary.input = "center")
+all.models.std <- dredge(global.std, m.lim = c(0,3), REML = FALSE)
+```
+Another useful command is *get.models*, which subsets all models that fall under a certain criteria and puts them in a list. You can select based on delta aic or the cumulative sum of weights
+
+```{r}
+top.list <- (get.models(all.models.std, subset = delta < 4))
+top.list
+# top.list
+# 
+# top.list %>% 
+# 	map_df(r.squaredGLMM) %>% 
+# 	# flatten() %>% 
+# 	bind_rows()
+```
+### Marginal and Conditional R squared
+We still haven't looked at how well our models actually fit the data. With random effects traditional R^2 doesn't work. Traditionally people use a psuedo R^2 which fits predicted against fitted values; however, there are apparently problems with this approach. Recently, people have developed a technique to partition the variance explained by fixed vs. random factors in the model. In our case, the marginal R^2 describes the proportion of variance explained by fixed effects only, and the conditional R^2 describes the proportion of variance explained by both fixed AND random effects.There is a function in MuMIn that can do this for you. We'll use *lapply* to run this function for each model in our top ranked list..
+
+```{r}
+r.sqrd.list <- lapply(top.list, FUN=r.squaredGLMM) 
+r.sqrd.list
+
+model.output <- top.list %>% 
+	map(.f = r.squaredGLMM) %>% 
+	map_df(~ data_frame(x = .x[["R2c"]]))
+	as.data.frame(.)%>%
+	t(.) %>% 
+	as.data.frame(.) %>%
+	bind_cols(., as.data.frame(summary(model.avg(all.models.std, subset = delta < 4))$msTable)) %>% View
+	
+	
+top.list %>% 
+	map(r.squaredGLMM) %>% 
+	map(t) %>% 
+	map_df(as.data.frame, .id = "model")
+	
+	
+	
+	map_df(~ data_frame(x = .x[["R2c"]]))
+	as.data.frame(.)%>%
+	t(.) %>% 
+	as.data.frame(.) %>%
+	bind_cols(., as.data.frame(summary(model.avg(all.models.std, subset = delta < 4))$msTable)) %>% View
+
+terms <- c(rownames((summary(model.avg(all.models.std, subset = delta < 4))$msTable)))
+
+all.models.std %>% 
+	model.avg(subset = delta < 4) %>% 
+	summary %>% 
+	.$"msTable" %>% 
+	add_rownames(var = "component_terms")
+
+
+?as.data.frame
+```
+Finally, run the following code to spit out two clean data frames; one with slope estimates and 95% CI's, the second with top ranked models, AICc scores, and marginal and conditional R^2 values. Note, this is clunky but I haven't figured out a good method to automate.
+
+```{r}
+
+## Slope coefficients and CI
+top.sum <- summary(model.avg(all.models.std, subset = delta < 4))
+top.sum
+top.coef <- as.data.frame(top.sum$coefTable)
+top.coef
+
+## AIC and model fits
+#Extract R squareds
+model.r2 <- as.data.frame(rbind(r.sqrd.list[[1]],r.sqrd.list[[2]],r.sqrd.list[[3]],r.sqrd.list[[4]]))
+## Extract AIC table
+aic.table <- top.sum$msTable
+aic.table
+## Bind em' together
+model.output2 <- cbind(aic.table, model.r2)
+model.output
+
+```
+

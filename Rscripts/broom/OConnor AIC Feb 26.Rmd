@@ -1,0 +1,141 @@
+---
+title: "AIC and Model Averaging"
+output: ioslides_presentation
+widescreen: true
+smaller: true
+---
+
+## AIC and model averaging
+Load following packages
+
+```{r, warning=FALSE, error=FALSE, message = FALSE}
+require(lme4)
+require(MuMIn)
+require(arm)
+require(dplyr)
+require(purrr)
+require(broom)
+```
+
+## npk dataset
+plant yield following manipulations of N, P, and K in 6 treatment blocks.
+```{r,error=FALSE}
+head(npk)
+# attach(npk)
+npk
+```
+
+## AIC in base R
+Compare global to reduced model
+```{r,error=FALSE}
+# Global model (all additive terms)
+global.lm <- lm(yield ~ N + K + P, data = npk)
+# Make a reduced model
+reduced.lm <- lm(yield ~ N + K, data = npk)
+# Use AIC to compare with the global
+AIC(global.lm, reduced.lm)
+```
+
+## Model Selection with MuMIn
+Global mixed effects model with all possible interaction terms using lme4
+```{r,error=FALSE}
+global <-lmer(yield ~ N*P*K + (1|block),na.action = "na.fail", data = npk)
+```
+
+## Ranking models with AIC 
+using dredge function
+```{r, warning=FALSE,error=FALSE}
+all.models <- dredge(global, rank ="AICc", m.lim=c(0,3), REML = FALSE)
+all.models
+```
+
+## Model averaged parameter estimates
+```{r,error=FALSE}
+model.avg(all.models)
+```
+
+## Averaging across subsets
+```{r,error=FALSE}
+summary(model.avg(all.models, subset = delta < 4))
+summary(model.avg(all.models, subset = cumsum(weight) <= .95)) ## or all models in the 95% CI
+```
+
+## Model averaged 95% CIs
+The command *full = TRUE* gives full averages
+```{r,error=FALSE}
+confint(model.avg(all.models), level = 0.95)
+
+```
+
+## Standardizing Predictors
+```{r, warning=FALSE,error=FALSE}
+global.std <- standardize(global, standardize.y = FALSE, binary.input = "center")
+all.models.std <- dredge(global.std, m.lim=c(0,3), REML = FALSE)
+top.list <- get.models(all.models.std, subset = delta < 4)
+```
+
+## Table with AIC ranks and marginal and conditional R^2
+```{r,error=FALSE}
+top.sum <- summary(model.avg(all.models.std, subset = delta < 4))
+model.out <- cbind(t(as.data.frame(lapply(top.list, FUN=r.squaredGLMM))),top.sum$msTable)
+model.out
+```
+
+## Or using this function by Joey
+```{r,error=FALSE}
+# model.output <- top.list %>% 
+#         map(r.squaredGLMM) %>%
+#         as.data.frame(.)%>%
+#         t(.) %>% 
+#         as.data.frame(.) %>% 
+#         bind_cols(., as.data.frame(summary(model.avg(all.models.std, subset = delta <
+# 4))$msTable))
+```
+```{r}
+r2 <- top.list %>% 
+	map(r.squaredGLMM) %>% 
+	map(t) %>% 
+	map_df(as.data.frame, .id = "model")
+
+aic.table <- all.models.std %>% 
+	model.avg(subset = delta < 4) %>% 
+	summary %>% 
+	.$"msTable" %>% 
+	add_rownames(var = "component_terms")
+
+model.table <- bind_cols(r2, aic.table)
+```
+
+## Model output table
+```{r}
+model.table
+```
+
+
+## AIC output table
+```{r,error=FALSE}
+model.out
+## or
+model.table
+```
+
+## Model averaged slope and 95 CI table
+```{r,error=FALSE}
+top.sum <- summary(model.avg(all.models.std, subset = delta < 4))
+est.ci <- cbind(top.sum$coefmat.subset,confint(top.sum))
+est.ci
+```
+
+## To dredge or not to dredge?
+```{r}
+## set up a set of candidate models
+mod1 <- lm(yield ~ N + K + P, data = npk) ## hyp: yeild varies as function of all three nutrients
+mod2 <- lm(yield ~ N + K, data = npk) ## hyp: yield varies as a function of N and K
+mod3 <- lm(yield ~ N, data = npk) ## hyp: yeild varies as a function of N only
+mod4 <- lm(yield ~ N*P*K, data = npk) ## 
+
+model.selection <- model.sel(mod1, mod2, mod3, mod4)
+model.avg(model.selection, subset = delta <= 2)
+## and then carry on with analysis as above
+```
+
