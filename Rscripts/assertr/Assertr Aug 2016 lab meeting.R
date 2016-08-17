@@ -46,7 +46,21 @@ gapminder_mistake %>%   ## command shift m is the shortcut
   assert(in_set(all_continents), continent)  # checking whether all the entries in continent are from the list all_continents
 
 ## create a predicate function (or something that evaluates to true or false)
-is_factor <- function(x) is.factor(x)
+is_greater_than_zero <- function(x) is.numeric(x) & x > 0
 
 gapminder %>%
-  assert(is_factor, country, continent)
+  assert(is_greater_than_zero, country, continent)
+
+
+## challenge
+
+new.data <- read.csv("./Rscripts/assertr/gapminder_2016.csv", sep = ',')
+
+new.data %>%
+  assert(within_bounds(0, Inf), lifeExp:gdpPercap) 
+
+new.data %>%   ## command shift m is the shortcut
+  assert(not_na, country:gdpPercap) %>%
+  assert(in_set(all_continents), continent) 
+
+
